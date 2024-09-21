@@ -478,7 +478,6 @@ void main_loop ()
 	io_taskmanager();
 	proc_default_network();
 	debug_destination();
-	serial_proc();
 }
 
 void user_init()

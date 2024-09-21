@@ -12,7 +12,7 @@
 
 #ifdef GLOBAL_DBG_EN
 //#define HANDLE_EV_DBG_EN
-#define RADAR_DBG_EN
+//#define RADAR_DBG_EN
 //#define BUTTON_DBG_EN
 //  #define TEST_AUTO_DBG_EN
 //  #define CUSTOM_DBG_EN

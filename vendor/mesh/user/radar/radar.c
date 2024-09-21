@@ -266,7 +266,7 @@ byte_pUart1CallbackFunc2Args pvUart1RxHandleCallback = NULL;
 static void tagretDirectionGPIOConfig(void);
 static u8 radar_signal_check(void);
 u8 RADAR_getSinal(void);
-static u8 RxBufPoll(void);
+static void RxBufPoll(u8 rcv_data);
 static void radarEnableInit(void);
 void serial_handle_rx_message_received( u8* buff, int len );
 void handleDataRx(DEVREPORT_BUFFER_P pCmd, uint8_t length);
@@ -577,244 +577,145 @@ void statusRadarEventProcess(void)
 void uartRadarInit(void){
 	uart_drv_init();
 	uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-
-
-
 	blc_register_hci_handler (blc_rx_from_uart, blc_hci_tx_to_uart);		//default handler
 	handle_tx_message_callback_init(serial_handle_rx_message_received);
 
-
-	// Initialize queue for receive data
-	queues_init(&srQueueReceiver, (u8*)pBuffReceiver, SERIAL_DATA_MAX_LENGHT, sizeof(u8));
 }
 
 
 
-/**
- * @func    serial_handle_rx_message_received
- * @brief
- * @param
- * @retval  None
- */
-void serial_handle_rx_message_received( u8* buff, int len )
-{
-
+void serial_handle_rx_message_received(u8* buff, int len) {
 	for (u8 i = 0; i < len; i++) {
-		queues_push(&srQueueReceiver, buff+i);
-	}
-//	DBG_RADAR_SEND_STR("\nLength: ");
-//	DBG_RADAR_SEND_INT(len);
-//	DBG_RADAR_SEND_STR("\n");
-//	for(uint8_t i = 0; i < len; i++){
-//		DBG_RADAR_SEND_HEX(buff[i]);
-//		DBG_RADAR_SEND_STR(" ");
-//	}
-//	DBG_RADAR_SEND_STR("\n");
+        RxBufPoll(buff[i]);
+    }
 }
-
-
 
 /************************ HANDLER SERIAL RECEIVER *****************************/
 
-/**
- * @func   serial_proc
- * @brief  None
- * @param  None
- * @retval None
- */
-void serial_proc(void)
-{
-	u8 stateRx = RxBufPoll();
 
-	if (stateRx != UART_STATE_IDLE) {
-		switch (stateRx) {
-			case UART_STATE_ACK_RECEIVED:
-				break;
+static void RxBufPoll(u8 rcv_data) {
 
-			case UART_STATE_NACK_RECEIVED:
-				break;
+    switch (uart1RxStr.DataReceiverStep) {
+        case RX_STATE_START_1:
+            if (rcv_data == FRAME_HEADER_REPORT_DATA) {
+                uart1RxStr.DataPacketLength = FRAME_LENGTH_REPORT_DATA;
+                uart1RxStr.Data[0] = CMD_REPORT_HEADER;
+                uart1RxStr.Data[1] = 0x00;
+                uart1RxStr.ReceiverByteCount = 2;
+                uart1RxStr.DataReceiverStep = RX_STATE_DATA;
+            } else if (rcv_data == FRAME_HEADER_REPORT_START_BYTE1) {
+                uart1RxStr.Data[0] = CMD_REPORT_AUTO_CONFIG_HEADER;
+                uart1RxStr.Data[1] = 0x00;
+                uart1RxStr.ReceiverByteCount = 2;
+                uart1RxStr.DataReceiverStep = RX_STATE_START_2;
+            } else if (rcv_data == FRAME_HEADER_START_BYTE1) {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_2;
+            } else {
+            	uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+            }
+            break;
 
-			case UART_STATE_DATA_RECEIVED:
-				handleDataRx((DEVREPORT_BUFFER_P)&uart1RxStr.Data[0], uart1RxStr.DataPacketLength);
-				break;
+        case RX_STATE_START_2:
+            if ((rcv_data == FRAME_HEADER_START_BYTE2) || (rcv_data == FRAME_HEADER_REPORT_START_BYTE2)) {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_3;
+            } else {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+            }
+            break;
 
-			case UART_STATE_ERROR:
-			case UART_STATE_RX_TIMEOUT:
-				break;
+        case RX_STATE_START_3:
+            if ((rcv_data == FRAME_HEADER_START_BYTE3) || (rcv_data == FRAME_HEADER_REPORT_START_BYTE3)) {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_4;
+            } else {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
 
-			default:
-				break;
-		}
-	}
+            }
+            break;
+
+        case RX_STATE_START_4:
+            if ((rcv_data == FRAME_HEADER_START_BYTE4) || (rcv_data == FRAME_HEADER_REPORT_START_BYTE4)) {
+                uart1RxStr.DataReceiverStep = RX_STATE_LENGTH_1;
+            } else {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+            }
+            break;
+
+        case RX_STATE_LENGTH_1:
+            if (rcv_data > SERIAL_DATA_MAX_LENGHT) {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+
+            } else {
+                uart1RxStr.DataPacketLength = rcv_data;
+                uart1RxStr.DataReceiverStep = RX_STATE_LENGTH_2;
+            }
+            break;
+
+        case RX_STATE_LENGTH_2:
+            if (rcv_data > SERIAL_DATA_MAX_LENGHT) {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+            } else {
+                if ((rcv_data == 0) && (uart1RxStr.Data[0] == CMD_REPORT_AUTO_CONFIG_HEADER)) {
+                    uart1RxStr.DataPacketLength = uart1RxStr.DataPacketLength + 2;
+                    uart1RxStr.DataReceiverStep = RX_STATE_DATA;
+                } else {
+                    uart1RxStr.ReceiverByteCount = 0;
+                    uart1RxStr.DataReceiverStep = RX_STATE_DATA;
+                }
+            }
+            break;
+
+        case RX_STATE_DATA:
+            if (uart1RxStr.ReceiverByteCount < uart1RxStr.DataPacketLength) {
+                uart1RxStr.Data[uart1RxStr.ReceiverByteCount] = rcv_data;
+                uart1RxStr.ReceiverByteCount++;
+            } else {
+                if ((rcv_data == FRAME_END_BYTE1) || (rcv_data == FRAME_REPORT_END_BYTE1) || (rcv_data == FRAME_END_REPORT_DATA)) {
+                    if (rcv_data == FRAME_END_REPORT_DATA) {
+                        uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+                        handleDataRx((DEVREPORT_BUFFER_P)&uart1RxStr.Data[0], uart1RxStr.DataPacketLength);
+                    } else {
+                        uart1RxStr.DataReceiverStep = RX_STATE_END_2;
+                    }
+                } else {
+                    uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+                }
+            }
+            break;
+
+        case RX_STATE_END_2:
+            if ((rcv_data == FRAME_END_BYTE2) || (rcv_data == FRAME_REPORT_END_BYTE2)) {
+                uart1RxStr.DataReceiverStep = RX_STATE_END_3;
+            } else {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+
+            }
+            break;
+
+        case RX_STATE_END_3:
+            if ((rcv_data == FRAME_END_BYTE3) || (rcv_data == FRAME_REPORT_END_BYTE3)) {
+                uart1RxStr.DataReceiverStep = RX_STATE_END_4;
+            } else {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+
+            }
+            break;
+
+        case RX_STATE_END_4:
+            if ((rcv_data == FRAME_END_BYTE4) || (rcv_data == FRAME_REPORT_END_BYTE4)) {
+
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+                handleDataRx((DEVREPORT_BUFFER_P)&uart1RxStr.Data[0], uart1RxStr.DataPacketLength);
+            } else {
+                uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+            }
+            break;
+
+        default:
+            uart1RxStr.DataReceiverStep = RX_STATE_START_1;
+            break;
+    }
 }
 
-/**
- * @func   RxBufPoll
- * @brief  None
- * @param  None
- * @retval None
- */
-static u8 RxBufPoll(void)
-{
-	u8 rcv_data;
-	    u8 byUart1State = UART_STATE_IDLE;
-
-	    while (queue_count(&srQueueReceiver) && (byUart1State == UART_STATE_IDLE))
-	    {
-	    	queues_get(&srQueueReceiver, &rcv_data);
-
-	    	/* DEBUG DIR MCU -> ZB */
-	//    	printf("%x  |   ", rcv_data);
-
-//	    	DBG_RADAR_SEND_HEX(rcv_data);
-//	    	DBG_RADAR_SEND_STR("\n");
-
-
-
-			switch (uart1RxStr.DataReceiverStep)
-			{
-				case RX_STATE_START_1:
-					if(rcv_data == FRAME_HEADER_REPORT_DATA){
-						uart1RxStr.DataPacketLength = FRAME_LENGTH_REPORT_DATA;
-						uart1RxStr.Data[0] = CMD_REPORT_HEADER;
-						uart1RxStr.Data[1] = 0x00;
-						uart1RxStr.ReceiverByteCount = 2;
-						uart1RxStr.DataReceiverStep = RX_STATE_DATA;
-					}else if(rcv_data == FRAME_HEADER_REPORT_START_BYTE1){
-						uart1RxStr.Data[0] = CMD_REPORT_AUTO_CONFIG_HEADER;
-						uart1RxStr.Data[1] = 0x00;
-						uart1RxStr.ReceiverByteCount = 2;
-						uart1RxStr.DataReceiverStep = RX_STATE_START_2;
-					}else if(rcv_data == FRAME_HEADER_START_BYTE1){
-						uart1RxStr.DataReceiverStep = RX_STATE_START_2;
-					}else{
-						byUart1State = UART_STATE_ERROR;
-					}
-				break;
-
-				case RX_STATE_START_2:
-					if((rcv_data == FRAME_HEADER_START_BYTE2) || (rcv_data == FRAME_HEADER_REPORT_START_BYTE2)){
-						uart1RxStr.DataReceiverStep = RX_STATE_START_3;
-					}else{
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-				break;
-
-				case RX_STATE_START_3:
-					if((rcv_data == FRAME_HEADER_START_BYTE3) || (rcv_data == FRAME_HEADER_REPORT_START_BYTE3)){
-						uart1RxStr.DataReceiverStep = RX_STATE_START_4;
-					}else{
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-				break;
-
-				case RX_STATE_START_4:
-					if((rcv_data == FRAME_HEADER_START_BYTE4) || (rcv_data == FRAME_HEADER_REPORT_START_BYTE4)){
-
-						uart1RxStr.DataReceiverStep = RX_STATE_LENGTH_1;
-					}else{
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-
-				break;
-
-				case RX_STATE_LENGTH_1:
-					if(rcv_data > SERIAL_DATA_MAX_LENGHT){
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-					else{
-						uart1RxStr.DataPacketLength = rcv_data;
-	//					printf("length: %x \n ", uart1RxStr.DataPacketLength);
-						uart1RxStr.DataReceiverStep = RX_STATE_LENGTH_2;
-					}
-
-
-				break;
-				case RX_STATE_LENGTH_2:
-					if(rcv_data > SERIAL_DATA_MAX_LENGHT){
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-					else{
-						if((rcv_data == 0) && (uart1RxStr.Data[0] == CMD_REPORT_AUTO_CONFIG_HEADER))
-						{
-							uart1RxStr.DataPacketLength = uart1RxStr.DataPacketLength + 2;
-							uart1RxStr.DataReceiverStep = RX_STATE_DATA;
-
-						}else{
-							uart1RxStr.ReceiverByteCount = 0;
-							uart1RxStr.DataReceiverStep = RX_STATE_DATA;
-						}
-					}
-				break;
-
-				case RX_STATE_DATA:
-					if(uart1RxStr.ReceiverByteCount < uart1RxStr.DataPacketLength){
-						uart1RxStr.Data[uart1RxStr.ReceiverByteCount]	= rcv_data;
-//						DBG_RADAR_SEND_HEX(uart1RxStr.Data[uart1RxStr.ReceiverByteCount]);
-						uart1RxStr.ReceiverByteCount++;
-
-
-
-					}else{ // RX_STATE_END_1
-							if((rcv_data == FRAME_END_BYTE1) || (rcv_data == FRAME_REPORT_END_BYTE1) || (rcv_data == FRAME_END_REPORT_DATA)){
-								if(rcv_data == FRAME_END_REPORT_DATA){
-									byUart1State = UART_STATE_DATA_RECEIVED;
-									uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-								}else{
-									uart1RxStr.DataReceiverStep = RX_STATE_END_2;
-								}
-
-							}else{
-								uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-								byUart1State = UART_STATE_ERROR;
-							}
-					}
-
-				break;
-				case RX_STATE_END_2:
-					if((rcv_data == FRAME_END_BYTE2) || (rcv_data == FRAME_REPORT_END_BYTE2)){
-	//					printf("\nEnd: %x ", rcv_data);
-						uart1RxStr.DataReceiverStep = RX_STATE_END_3;
-					}else{
-
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-				break;
-
-				case RX_STATE_END_3:
-					if((rcv_data == FRAME_END_BYTE3) || (rcv_data == FRAME_REPORT_END_BYTE3)){
-	//					printf("\nEnd: %x ", rcv_data);
-						uart1RxStr.DataReceiverStep = RX_STATE_END_4;
-					}else{
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-				break;
-
-				case RX_STATE_END_4:
-					if((rcv_data == FRAME_END_BYTE4) || (rcv_data == FRAME_REPORT_END_BYTE4)){
-	//					printf("\nEnd: %x ", rcv_data);
-						byUart1State = UART_STATE_DATA_RECEIVED;
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-					}else{
-						uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-						byUart1State = UART_STATE_ERROR;
-					}
-				break;
-
-				default:
-					uart1RxStr.DataReceiverStep = RX_STATE_START_1;
-					break;
-			}
-	    }
-	    return byUart1State;
-}
 
 
 /*******************************************************************************/
@@ -1357,8 +1258,8 @@ void handleDataRx(DEVREPORT_BUFFER_P pCmd, uint8_t length){
 
 	u16 cmdID = pCmd->parameterConfig.cmdid;
 
-	DBG_RADAR_SEND_STR("\nCmdID: ");
-	DBG_RADAR_SEND_HEX(cmdID);
+//	DBG_RADAR_SEND_STR("\nCmdID: ");
+//	DBG_RADAR_SEND_HEX(cmdID);
 
 
 
@@ -1448,6 +1349,44 @@ void handleDataRx(DEVREPORT_BUFFER_P pCmd, uint8_t length){
 			u32 holdingGate5 = pCmd->thresholdReadConfig.holdingGate5;
 			u32 holdingGate6 = pCmd->thresholdReadConfig.holdingGate6;
 			u32 holdingGate7 = pCmd->thresholdReadConfig.holdingGate7;
+
+			DBG_RADAR_SEND_STR("\nmotionGate0: ");
+			DBG_RADAR_SEND_HEX(motionGate0);
+			DBG_RADAR_SEND_STR("\nmotionGate1: ");
+			DBG_RADAR_SEND_HEX(motionGate1);
+			DBG_RADAR_SEND_STR("\nmotionGate2: ");
+			DBG_RADAR_SEND_HEX(motionGate2);
+			DBG_RADAR_SEND_STR("\nmotionGate3: ");
+			DBG_RADAR_SEND_HEX(motionGate3);
+			DBG_RADAR_SEND_STR("\nmotionGate4: ");
+			DBG_RADAR_SEND_HEX(motionGate4);
+			DBG_RADAR_SEND_STR("\nmotionGate5: ");
+			DBG_RADAR_SEND_HEX(motionGate5);
+			DBG_RADAR_SEND_STR("\nmotionGate6: ");
+			DBG_RADAR_SEND_HEX(motionGate6);
+			DBG_RADAR_SEND_STR("\nmotionGate7: ");
+			DBG_RADAR_SEND_HEX(motionGate7);
+			DBG_RADAR_SEND_STR("\nholdingGate0: ");
+			DBG_RADAR_SEND_HEX(holdingGate0);
+			DBG_RADAR_SEND_STR("\nholdingGate1: ");
+			DBG_RADAR_SEND_HEX(holdingGate1);
+			DBG_RADAR_SEND_STR("\nholdingGate2: ");
+			DBG_RADAR_SEND_HEX(holdingGate2);
+			DBG_RADAR_SEND_STR("\nholdingGate3: ");
+			DBG_RADAR_SEND_HEX(holdingGate3);
+			DBG_RADAR_SEND_STR("\nholdingGate4: ");
+			DBG_RADAR_SEND_HEX(holdingGate4);
+			DBG_RADAR_SEND_STR("\nholdingGate5: ");
+			DBG_RADAR_SEND_HEX(holdingGate5);
+			DBG_RADAR_SEND_STR("\nholdingGate6: ");
+			DBG_RADAR_SEND_HEX(holdingGate6);
+			DBG_RADAR_SEND_STR("\nholdingGate7: ");
+			DBG_RADAR_SEND_HEX(holdingGate7);
+
+
+
+
+
 		}
 	}
 		break;

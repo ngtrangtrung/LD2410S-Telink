@@ -129,7 +129,7 @@ typedef char assert_PWM_IO_is_conflicted_with_UART_IO_Please_redefine_PWM_IO[(!!
 #define HCI_TX_FIFO_SIZE	(REPORT_ADV_BUF_SIZE)
 	#else
 	    #if HCI_LOG_FW_EN
-#define HCI_TX_FIFO_SIZE	(80)
+#define HCI_TX_FIFO_SIZE	(128) // TRUNGNT
         #else
 #define HCI_TX_FIFO_SIZE	(64)
         #endif
@@ -152,9 +152,9 @@ typedef char assert_PWM_IO_is_conflicted_with_UART_IO_Please_redefine_PWM_IO[(!!
 MYFIFO_INIT(hci_tx_fifo, HCI_TX_FIFO_SIZE, HCI_TX_FIFO_NUM); // include adv pkt and other event
 
 #if (IS_VC_PROJECT)
-MYFIFO_INIT(hci_rx_fifo, 512, 4);   // max play load 382
+MYFIFO_INIT(hci_rx_fifo, 512, 4);   // max payload 382
 #else
-MYFIFO_INIT(hci_rx_fifo, 72, 4);
+MYFIFO_INIT(hci_rx_fifo, 192, 4);
 #endif
 #endif
 
